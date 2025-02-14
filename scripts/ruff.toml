@@ -1,0 +1,14 @@
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["ALL"]
+ignore = ["COM", "ERA", "ISC001","ANN", "D", "S101", "PLR2004", "T20"]
+
+[lint.per-file-ignores]
+
+[lint.isort]
+required-imports = ["from __future__ import annotations"]
+
+[lint.pydocstyle]
+convention = "google"

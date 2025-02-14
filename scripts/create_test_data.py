@@ -5,6 +5,8 @@
 #     "polars>=1,<2",
 # ]
 # ///
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
@@ -87,7 +89,7 @@ def main() -> None:
     randfloats = gen.uniform(size=n)
     randbools = gen.choice((True, False), replace=True, size=n)
     randwords = gen.choice(LOREM_WORDS, replace=True, size=n)
-    df = pl.DataFrame(
+    example_df = pl.DataFrame(
         {
             "integers": randints,
             "strings": randwords,
@@ -98,7 +100,7 @@ def main() -> None:
             "bools": randbools,
         }
     )
-    df = df.with_columns(
+    example_df = example_df.with_columns(
         pl.from_epoch(pl.col("datetimes_us")),
         pl.from_epoch(pl.col("dates")).dt.date(),
         pl.from_epoch(pl.col("times")).dt.time(),
@@ -106,9 +108,9 @@ def main() -> None:
         pl.col("floats").cast(pl.Decimal(None, 8)).alias("decimal"),
         pl.lit([1, 2, 3, 4]).alias("list"),
     )
-    print(df)
+    print(example_df)
     Path("data").mkdir(exist_ok=True)
-    df.write_parquet("data/example_parquet.parquet")
+    example_df.write_parquet("data/example_parquet.parquet")
 
 
 if __name__ == "__main__":
