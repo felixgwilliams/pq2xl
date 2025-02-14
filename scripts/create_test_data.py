@@ -5,7 +5,7 @@
 #     "polars>=1,<2",
 # ]
 # ///
-from  pathlib import Path
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -79,7 +79,7 @@ LOREM_WORDS = (
 
 def main() -> None:
     gen = np.random.default_rng(seed=123)
-    n = 1_000_000
+    n = 100_000
     randints = gen.integers(-(1 << 31), 1 << 31, size=n)
     randints2 = gen.integers(-(1 << 31), 1 << 31, size=n)
     randints3 = gen.integers(-(1 << 31), 1 << 31, size=n)
@@ -103,6 +103,8 @@ def main() -> None:
         pl.from_epoch(pl.col("dates")).dt.date(),
         pl.from_epoch(pl.col("times")).dt.time(),
         pl.col("strings").cast(pl.Categorical).alias("categorical"),
+        pl.col("floats").cast(pl.Decimal(None, 8)).alias("decimal"),
+        pl.lit([1, 2, 3, 4]).alias("list"),
     )
     print(df)
     Path("data").mkdir(exist_ok=True)
