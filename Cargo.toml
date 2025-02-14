@@ -1,0 +1,17 @@
+[package]
+name = "pqtool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4.39"
+clap = { version = "^4.5.28", features = ["derive"] }
+polars = { version = "0.46", features = ["lazy", "polars-io", "parquet", 'dtype-categorical'] }
+polars-arrow = "0.46"
+polars_excel_writer = { version = "0.12.0", features = ["zlib"] }
+
+[dev-dependencies]
+random = "0.14.0"
+
+[profile.release]
+lto = "fat"
