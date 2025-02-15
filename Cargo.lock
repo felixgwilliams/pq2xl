@@ -1649,7 +1649,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pqtool"
+name = "pq2xl"
 version = "0.0.1"
 dependencies = [
  "anyhow",
