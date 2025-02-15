@@ -1,7 +1,14 @@
-#![warn(clippy::all, clippy::pedantic, clippy::nursery, clippy::style)]
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::style,
+    clippy::cargo
+)]
 #![warn(clippy::unwrap_used)]
-#![warn(clippy::multiple_crate_versions)]
-#![allow(clippy::cargo)]
+// comment to see any multiple versions for core deps
+#![allow(clippy::multiple_crate_versions)]
+// #![allow(clippy::cargo)]
 // #![warn(missing_docs)]
 
 use std::{

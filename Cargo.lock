@@ -1666,7 +1666,6 @@ dependencies = [
  "clap",
  "clap-markdown",
  "polars",
- "polars-arrow",
  "polars_excel_writer",
  "random",
 ]
