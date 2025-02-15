@@ -4,6 +4,12 @@
 
 `pq2xl` is a simple command line tool for converting parquet files to xlsx or csv.
 
+```shell
+pq2xl data.parquet -o data.xlsx
+```
+
+See all options in [CommandLineHelp.md](CommandLineHelp.md).
+
 ## Acknowledgements
 
 This tool is a very simple interface, entirely powered by the following libraries:

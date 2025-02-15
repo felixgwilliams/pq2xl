@@ -3,14 +3,16 @@
     clippy::pedantic,
     clippy::nursery,
     clippy::style,
-    clippy::cargo
+    clippy::cargo,
+    rustdoc::all
 )]
 #![warn(clippy::unwrap_used)]
 // comment to see any multiple versions for core deps
 #![allow(clippy::multiple_crate_versions)]
 // #![allow(clippy::cargo)]
-// #![warn(missing_docs)]
+#![warn(missing_docs)]
 
+//! Application to convert parquet to Excel or CSV.
 use std::{
     fs::File,
     path::{Path, PathBuf},
@@ -19,11 +21,10 @@ use std::{
 use anyhow::{bail, Error};
 use clap::{
     builder::{styling::AnsiColor, Styles},
-    command, ArgAction, Parser, ValueEnum,
+    command, Parser, ValueEnum,
 };
 use polars::prelude::*;
-// use polars_core::fmt::fmt_duration_string;
-// use polars_core::fmt::iso_duration_string;
+use polars_excel_writer::PolarsXlsxWriter;
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Yellow.on_default())
@@ -32,36 +33,39 @@ const STYLES: Styles = Styles::styled()
     .placeholder(AnsiColor::Green.on_default());
 
 #[derive(Debug, Clone)]
-enum Conversion {
+enum Conversion<'a> {
     Pass,
     Convert(DataType),
-    Error(DataType),
-    Process(DataType),
+    Error(&'a DataType),
+    Process(&'a DataType),
+    Lossy(&'a DataType),
 }
 
-use polars_excel_writer::PolarsXlsxWriter;
-fn map_supported(dtype: &DataType) -> Conversion {
+const fn map_supported(dtype: &DataType) -> Conversion {
     match dtype {
+        // essentially lossless conversion
         DataType::UInt8 => Conversion::Pass,
         DataType::UInt16 => Conversion::Pass,
         DataType::UInt32 => Conversion::Pass,
-        DataType::UInt64 => Conversion::Pass,
         DataType::Int8 => Conversion::Pass,
         DataType::Int16 => Conversion::Pass,
         DataType::Int32 => Conversion::Pass,
-        DataType::Int64 => Conversion::Pass,
-        DataType::Int128 => Conversion::Pass,
         DataType::Float32 => Conversion::Pass,
-        DataType::Float64 => Conversion::Pass,
         DataType::String => Conversion::Pass,
         DataType::Null => Conversion::Pass,
-        DataType::Date => Conversion::Pass,
-        DataType::Datetime(_, _) => Conversion::Pass,
-        DataType::Time => Conversion::Pass,
         DataType::Boolean => Conversion::Pass,
-        // not supported
+        DataType::Float64 => Conversion::Pass,
+        // lossy temporal conversion
+        DataType::Date => Conversion::Lossy(dtype),
+        DataType::Datetime(_, _) => Conversion::Lossy(dtype),
+        DataType::Time => Conversion::Lossy(dtype),
+        // lossy conversion (excel uses 64 bit floats everywhere)
+        DataType::Int128 => Conversion::Lossy(dtype),
+        DataType::UInt64 => Conversion::Lossy(dtype),
+        DataType::Int64 => Conversion::Lossy(dtype),
+
+        // not supported by polars_xlsxwriter
         DataType::Binary => Conversion::Convert(DataType::String),
-        DataType::BinaryOffset => Conversion::Convert(DataType::String),
         #[cfg(feature = "polars-categorical")]
         DataType::Enum(_, _) => Conversion::Convert(DataType::String),
         #[cfg(feature = "polars-decimal")]
@@ -70,17 +74,32 @@ fn map_supported(dtype: &DataType) -> Conversion {
         DataType::Categorical(_, _) => Conversion::Convert(DataType::String),
         // cannot convert
         #[cfg(feature = "polars-struct")]
-        DataType::Struct(inner) => Conversion::Error(DataType::Struct(inner.clone())),
-        DataType::Unknown(inner) => Conversion::Error(DataType::Unknown(*inner)),
+        DataType::Struct(_) => Conversion::Error(dtype),
+        DataType::Unknown(_) => Conversion::Error(dtype),
         // can convert in a somewhat lossy way
-        DataType::List(inner) => Conversion::Process(DataType::List(inner.clone())),
-        DataType::Duration(timeunit) => Conversion::Process(DataType::Duration(*timeunit)),
+        DataType::List(_) => Conversion::Process(dtype),
+        DataType::Duration(_) => Conversion::Process(dtype),
+        // not sure what this is
+        DataType::BinaryOffset => Conversion::Error(dtype),
     }
 }
+
+#[derive(Debug, Clone, ValueEnum, Copy, Default)]
+enum LossyAction {
+    #[default]
+    Allow,
+    Warn,
+    Error,
+}
+
 #[derive(Debug, Clone)]
-struct ConvertOptions {}
+struct ConvertOptions {
+    lossy_action: LossyAction,
+    duration_format: DurationFormat,
+}
 
 fn process(c: Expr, dtype: &DataType, options: &ConvertOptions) -> Result<Expr, Error> {
+    lossy_action(dtype, options)?;
     match dtype {
         DataType::List(_) => Ok(process_list(c, options)),
         DataType::Duration(timeunit) => Ok(process_duration(c, *timeunit, options)),
@@ -105,20 +124,27 @@ fn easy_name(c: &Expr) -> Result<String, Error> {
         _ => bail!("Unknown col name"),
     }
 }
-fn process_duration(c: Expr, timeunit: TimeUnit, _options: &ConvertOptions) -> Expr {
+fn process_duration(c: Expr, timeunit: TimeUnit, options: &ConvertOptions) -> Expr {
     // dbg!(&c);
 
-    eprintln!(
-        "Duration column {} will be converted to number of {}",
-        easy_name(&c).as_deref().unwrap_or("[UNKNOWN]"),
-        timeunit
-    );
-    c.to_physical().name().keep()
-    // let formatstr = format!("{{}}{timeunit}");
-    // format_str(&formatstr, vec![c.to_physical()])
-    //     .expect("invalid format string")
-    //     .name()
-    //     .keep()
+    match options.duration_format {
+        DurationFormat::Physical => {
+            eprintln!(
+                "Duration column {} will be converted to number of {}",
+                easy_name(&c).as_deref().unwrap_or("[UNKNOWN]"),
+                timeunit
+            );
+            c.to_physical().name().keep()
+        }
+        DurationFormat::Unit => {
+            let formatstr = format!("{{}}{timeunit}");
+            format_str(&formatstr, vec![c.to_physical()])
+                .expect("invalid format string")
+                .name()
+                .keep()
+        }
+        DurationFormat::Human => todo!(),
+    }
 }
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum OutFormat {
@@ -126,6 +152,14 @@ enum OutFormat {
     Xlsx,
     Csv,
 }
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum DurationFormat {
+    #[default]
+    Physical,
+    Unit,
+    Human,
+}
+
 // uses an idea from https://jwodder.github.io/kbits/posts/clap-bool-negate/
 
 #[derive(Parser, Debug, Clone)]
@@ -135,19 +169,40 @@ struct Cli {
     #[arg(long, hide = true)]
     pub markdown_help: bool,
 
+    /// path to input parquet file
     in_file: PathBuf,
 
+    /// path to output file. If not given, will use the input file name with a different extension
     #[arg(long, short)]
     out_file: Option<PathBuf>,
 
-    #[arg(long = "no-coerce", action=ArgAction::SetFalse)]
-    coerce: bool,
-
-    #[arg(long = "coerce", overrides_with = "coerce")]
-    _no_coerce: bool,
-
+    /// Specify output format csv/xlsx. If not given, infer from the output file name, falling back to xlsx.
     #[arg(long, short)]
     format: Option<OutFormat>,
+
+    /// What to do if a data type is encountered whose conversion may be lossy. warn: emit warning. error: abort. allow: continue. Default: allow.
+    #[arg(long)]
+    lossy_action: Option<LossyAction>,
+    /// How to format duration columns.
+    ///     physical: underlying integer form (the unit will be printed in the shell)
+    ///     unit: Same as physical, but with the unit (ms, us, ns) appended.
+    ///     human: human-readable format
+    ///     Default: physical
+    #[arg(long)]
+    duration_format: Option<DurationFormat>,
+}
+
+fn lossy_action(dtype: &DataType, options: &ConvertOptions) -> Result<(), Error> {
+    match options.lossy_action {
+        LossyAction::Allow => {}
+        LossyAction::Warn => {
+            eprintln!("Warning conversion of {dtype} is lossy");
+        }
+        LossyAction::Error => {
+            bail!("Conversion of {dtype} is lossy. Aborting")
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), Error> {
@@ -164,18 +219,21 @@ fn main() -> Result<(), Error> {
     let mut df = ParquetReader::new(pq_file).set_rechunk(true).finish()?;
 
     let mut casts = vec![];
-    if cli.coerce {
-        let convert_options = ConvertOptions {};
-        for (col_num, column) in df.get_columns().iter().enumerate() {
-            match map_supported(column.dtype()) {
-                Conversion::Pass => {}
-                Conversion::Convert(target) => {
-                    casts.push(nth(col_num.try_into()?).cast(target));
-                }
-                Conversion::Error(tt) => bail!("Unsupported data type: {tt:?}"),
-                Conversion::Process(dtype) => {
-                    casts.push(process(nth(col_num.try_into()?), &dtype, &convert_options)?);
-                }
+    let convert_options = ConvertOptions {
+        lossy_action: cli.lossy_action.unwrap_or_default(),
+        duration_format: cli.duration_format.unwrap_or_default(),
+    };
+    for (col_num, column) in df.get_columns().iter().enumerate() {
+        match map_supported(column.dtype()) {
+            Conversion::Pass => {}
+            Conversion::Lossy(dtype) => lossy_action(dtype, &convert_options)?,
+            Conversion::Convert(target) => {
+                lossy_action(column.dtype(), &convert_options)?;
+                casts.push(nth(col_num.try_into()?).cast(target.clone()));
+            }
+            Conversion::Error(tt) => bail!("Unsupported data type: {tt:?}"),
+            Conversion::Process(dtype) => {
+                casts.push(process(nth(col_num.try_into()?), dtype, &convert_options)?);
             }
         }
     }
@@ -187,9 +245,17 @@ fn main() -> Result<(), Error> {
         .format
         .unwrap_or_else(|| format_from_file(cli.out_file.as_deref()).unwrap_or_default())
     {
-        OutFormat::Csv => todo!(),
+        OutFormat::Csv => {
+            let out_file = cli
+                .out_file
+                .clone()
+                .unwrap_or_else(|| cli.in_file.with_extension("csv"));
+            let writer = File::create(out_file)?;
+            CsvWriter::new(writer).finish(&mut df)?;
+        }
         OutFormat::Xlsx => {
             // Create a new Excel writer.
+
             let mut xlsx_writer = PolarsXlsxWriter::new();
 
             // Write the dataframe to Excel.
