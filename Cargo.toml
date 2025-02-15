@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.95"
 chrono = "0.4.39"
-clap = { version = "^4.5.28", features = ["derive"] }
+clap = { version = "4.5.29", features = ["derive"] }
 polars = { version = "0.46", features = [
     "lazy",
     "polars-io",
