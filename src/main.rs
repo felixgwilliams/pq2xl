@@ -22,6 +22,8 @@ use clap::{
     command, ArgAction, Parser, ValueEnum,
 };
 use polars::prelude::*;
+// use polars_core::fmt::fmt_duration_string;
+// use polars_core::fmt::iso_duration_string;
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Yellow.on_default())
@@ -60,7 +62,6 @@ fn map_supported(dtype: &DataType) -> Conversion {
         // not supported
         DataType::Binary => Conversion::Convert(DataType::String),
         DataType::BinaryOffset => Conversion::Convert(DataType::String),
-        DataType::Duration(_) => Conversion::Convert(DataType::String),
         #[cfg(feature = "polars-categorical")]
         DataType::Enum(_, _) => Conversion::Convert(DataType::String),
         #[cfg(feature = "polars-decimal")]
@@ -71,16 +72,22 @@ fn map_supported(dtype: &DataType) -> Conversion {
         #[cfg(feature = "polars-struct")]
         DataType::Struct(inner) => Conversion::Error(DataType::Struct(inner.clone())),
         DataType::Unknown(inner) => Conversion::Error(DataType::Unknown(*inner)),
+        // can convert in a somewhat lossy way
         DataType::List(inner) => Conversion::Process(DataType::List(inner.clone())),
+        DataType::Duration(timeunit) => Conversion::Process(DataType::Duration(*timeunit)),
     }
 }
-fn process(c: Expr, dtype: &DataType) -> Result<Expr, Error> {
+#[derive(Debug, Clone)]
+struct ConvertOptions {}
+
+fn process(c: Expr, dtype: &DataType, options: &ConvertOptions) -> Result<Expr, Error> {
     match dtype {
-        DataType::List(_) => Ok(process_list(c)),
+        DataType::List(_) => Ok(process_list(c, options)),
+        DataType::Duration(timeunit) => Ok(process_duration(c, *timeunit, options)),
         _ => bail!("Don't know how to process {dtype:?}"),
     }
 }
-fn process_list(c: Expr) -> Expr {
+fn process_list(c: Expr, _options: &ConvertOptions) -> Expr {
     let joined = c
         .cast(DataType::List(Box::new(DataType::String)))
         .list()
@@ -91,6 +98,14 @@ fn process_list(c: Expr) -> Expr {
         .keep()
 }
 
+fn process_duration(c: Expr, _timeunit: TimeUnit, _options: &ConvertOptions) -> Expr {
+    c.to_physical()
+    // let formatstr = format!("{{}}{timeunit}");
+    // format_str(&formatstr, vec![c.to_physical()])
+    //     .expect("invalid format string")
+    //     .name()
+    //     .keep()
+}
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum OutFormat {
     #[default]
@@ -136,6 +151,7 @@ fn main() -> Result<(), Error> {
 
     let mut casts = vec![];
     if cli.coerce {
+        let convert_options = ConvertOptions {};
         for (col_num, column) in df.get_columns().iter().enumerate() {
             match map_supported(column.dtype()) {
                 Conversion::Pass => {}
@@ -144,11 +160,12 @@ fn main() -> Result<(), Error> {
                 }
                 Conversion::Error(tt) => bail!("Unsupported data type: {tt:?}"),
                 Conversion::Process(dtype) => {
-                    casts.push(process(nth(col_num.try_into()?), &dtype)?);
+                    casts.push(process(nth(col_num.try_into()?), &dtype, &convert_options)?);
                 }
             }
         }
     }
+    dbg!(&casts);
     if !casts.is_empty() {
         df = df.lazy().with_columns(casts).collect()?;
     }
