@@ -98,8 +98,22 @@ fn process_list(c: Expr, _options: &ConvertOptions) -> Expr {
         .keep()
 }
 
-fn process_duration(c: Expr, _timeunit: TimeUnit, _options: &ConvertOptions) -> Expr {
-    c.to_physical()
+fn easy_name(c: &Expr) -> Result<String, Error> {
+    match c {
+        Expr::Column(name) => Ok(format!("\"{name}\"")),
+        Expr::Nth(ind) => Ok(format!("{ind}")),
+        _ => bail!("Unknown col name"),
+    }
+}
+fn process_duration(c: Expr, timeunit: TimeUnit, _options: &ConvertOptions) -> Expr {
+    // dbg!(&c);
+
+    eprintln!(
+        "Duration column {} will be converted to number of {}",
+        easy_name(&c).as_deref().unwrap_or("[UNKNOWN]"),
+        timeunit
+    );
+    c.to_physical().name().keep()
     // let formatstr = format!("{{}}{timeunit}");
     // format_str(&formatstr, vec![c.to_physical()])
     //     .expect("invalid format string")
@@ -165,7 +179,7 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    dbg!(&casts);
+    // dbg!(&casts);
     if !casts.is_empty() {
         df = df.lazy().with_columns(casts).collect()?;
     }
