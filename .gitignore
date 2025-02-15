@@ -21,3 +21,8 @@ target/
 
 # for development
 .venv
+
+# profiling and coverage
+*.profraw
+*.html
+lcov.info

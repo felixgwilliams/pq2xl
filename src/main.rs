@@ -95,6 +95,10 @@ enum OutFormat {
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None, styles=STYLES)]
 struct Cli {
+    #[cfg(feature = "markdown-help")]
+    #[arg(long, hide = true)]
+    pub markdown_help: bool,
+
     in_file: PathBuf,
 
     #[arg(long, short)]
@@ -112,6 +116,12 @@ struct Cli {
 
 fn main() -> Result<(), Error> {
     let cli = Cli::parse();
+    #[cfg(feature = "markdown-help")]
+    if cli.markdown_help {
+        #[cfg(not(tarpaulin_include))]
+        clap_markdown::print_help_markdown::<Cli>();
+        return Ok(());
+    }
 
     // let convert_category = false;
     let pq_file = File::open(&cli.in_file)?;
