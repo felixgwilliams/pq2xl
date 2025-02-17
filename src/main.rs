@@ -146,7 +146,7 @@ fn process_duration(c: Expr, timeunit: TimeUnit, options: &ConvertOptions) -> Ex
         DurationFormat::Human => todo!(),
     }
 }
-#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, ValueEnum, PartialEq, Eq)]
 enum OutFormat {
     #[default]
     Xlsx,
@@ -205,6 +205,35 @@ fn lossy_action(dtype: &DataType, options: &ConvertOptions) -> Result<(), Error>
     Ok(())
 }
 
+fn get_conversions(df: &DataFrame, convert_options: &ConvertOptions) -> Result<Vec<Expr>, Error> {
+    let mut casts = vec![];
+    for (col_num, column) in df.get_columns().iter().enumerate() {
+        match map_supported(column.dtype()) {
+            Conversion::Pass => {}
+            Conversion::Lossy(dtype) => lossy_action(dtype, convert_options)?,
+            Conversion::Convert(target) => {
+                lossy_action(column.dtype(), convert_options)?;
+                casts.push(nth(col_num.try_into()?).cast(target.clone()));
+            }
+            Conversion::Error(tt) => bail!("Unsupported data type: {tt:?}"),
+            Conversion::Process(dtype) => {
+                casts.push(process(nth(col_num.try_into()?), dtype, convert_options)?);
+            }
+        }
+    }
+    Ok(casts)
+}
+
+fn process_df(df: DataFrame, convert_options: &ConvertOptions) -> Result<DataFrame, Error> {
+    let casts = get_conversions(&df, convert_options)?;
+    // dbg!(&casts);
+    if casts.is_empty() {
+        Ok(df)
+    } else {
+        Ok(df.lazy().with_columns(casts).collect()?)
+    }
+}
+
 fn main() -> Result<(), Error> {
     let cli = Cli::parse();
     #[cfg(feature = "markdown-help")]
@@ -218,29 +247,11 @@ fn main() -> Result<(), Error> {
     let pq_file = File::open(&cli.in_file)?;
     let mut df = ParquetReader::new(pq_file).set_rechunk(true).finish()?;
 
-    let mut casts = vec![];
     let convert_options = ConvertOptions {
         lossy_action: cli.lossy_action.unwrap_or_default(),
         duration_format: cli.duration_format.unwrap_or_default(),
     };
-    for (col_num, column) in df.get_columns().iter().enumerate() {
-        match map_supported(column.dtype()) {
-            Conversion::Pass => {}
-            Conversion::Lossy(dtype) => lossy_action(dtype, &convert_options)?,
-            Conversion::Convert(target) => {
-                lossy_action(column.dtype(), &convert_options)?;
-                casts.push(nth(col_num.try_into()?).cast(target.clone()));
-            }
-            Conversion::Error(tt) => bail!("Unsupported data type: {tt:?}"),
-            Conversion::Process(dtype) => {
-                casts.push(process(nth(col_num.try_into()?), dtype, &convert_options)?);
-            }
-        }
-    }
-    // dbg!(&casts);
-    if !casts.is_empty() {
-        df = df.lazy().with_columns(casts).collect()?;
-    }
+    df = process_df(df, &convert_options)?;
     match cli
         .format
         .unwrap_or_else(|| format_from_file(cli.out_file.as_deref()).unwrap_or_default())
@@ -266,6 +277,7 @@ fn main() -> Result<(), Error> {
                 .out_file
                 .clone()
                 .unwrap_or_else(|| cli.in_file.with_extension("xlsx"));
+
             xlsx_writer.save(out_file)?;
         }
     }
@@ -273,11 +285,30 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
-fn format_from_file(p: Option<&Path>) -> Option<OutFormat> {
-    let ext = p.and_then(Path::extension);
-    match ext.and_then(|e| e.to_str()) {
-        Some("xlsx") => Some(OutFormat::Xlsx),
-        Some("csv") => Some(OutFormat::Csv),
-        _ => None,
+fn format_from_file<P: AsRef<Path>>(p: Option<P>) -> Option<OutFormat> {
+    p.and_then(|p| {
+        let ext = p.as_ref().extension()?.to_str()?;
+        match ext {
+            "xlsx" => Some(OutFormat::Xlsx),
+            "csv" => Some(OutFormat::Csv),
+            _ => None,
+        }
+    })
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_format() {
+        assert_eq!(format_from_file(None::<&Path>), None);
+        assert_eq!(
+            format_from_file(Some(&PathBuf::from("example.xlsx"))),
+            Some(OutFormat::Xlsx)
+        );
+        assert_eq!(
+            format_from_file(Some(&PathBuf::from("example.csv"))),
+            Some(OutFormat::Csv)
+        );
+        assert_eq!(format_from_file(Some(&PathBuf::from("example.mp3"))), None);
     }
 }
