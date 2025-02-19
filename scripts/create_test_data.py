@@ -100,6 +100,7 @@ def main() -> None:
             "bools": randbools,
         }
     )
+    lorem_dedup = list(set(LOREM_WORDS))
     example_df = example_df.with_columns(
         pl.from_epoch(pl.col("datetimes_us")),
         pl.from_epoch(pl.col("dates")).dt.date(),
@@ -107,6 +108,9 @@ def main() -> None:
         pl.col("strings").cast(pl.Categorical).alias("categorical"),
         pl.col("floats").cast(pl.Decimal(None, 8)).alias("decimal"),
         pl.lit([1, 2, 3, 4]).alias("list"),
+        pl.col("strings").cast(pl.Binary).alias("binary"),
+        pl.col("strings").cast(pl.Enum(lorem_dedup)).alias("enum"),
+        pl.duration(milliseconds=pl.col("integers")).alias("duration_us"),
     )
     print(example_df)
     Path("data").mkdir(exist_ok=True)
